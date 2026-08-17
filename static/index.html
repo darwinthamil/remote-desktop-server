@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Remote Desktop</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; font-family: sans-serif; }
+    #status { background: #1a1a2e; color: #00ff88; font-family: monospace; font-size: 12px; padding: 6px 12px; text-align: center; }
+    #canvas-container { flex: 1; overflow: auto; position: relative; }
+    canvas { display: block; cursor: crosshair; touch-action: none; }
+    #toolbar { background: #1a1a2e; padding: 8px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    button { background: #16213e; color: #fff; border: 1px solid #0f3460; padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+    button:active { background: #0f3460; }
+    #keyboard-input { position: fixed; bottom: -100px; left: 0; opacity: 0; width: 1px; height: 1px; }
+    #quality-slider { width: 100px; accent-color: #00ff88; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .connected { background: #00ff88; }
+    .disconnected { background: #ff4444; }
+
+    #auth-overlay {
+      position: fixed; inset: 0; background: #0d0d1a; z-index: 10;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #auth-box { background: #1a1a2e; padding: 24px; border-radius: 10px; width: 280px; text-align: center; }
+    #auth-box h2 { color: #00ff88; font-size: 16px; margin-bottom: 14px; }
+    #auth-box input {
+      width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #0f3460;
+      background: #16213e; color: #fff; margin-bottom: 10px; font-size: 14px;
+    }
+    #auth-box button { width: 100%; background: #00ff88; color: #000; font-weight: bold; }
+    #auth-error { color: #ff4444; font-size: 12px; min-height: 16px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div id="auth-overlay">
+    <div id="auth-box">
+      <h2>Enter Access Token</h2>
+      <input type="password" id="token-input" placeholder="Access token" autocomplete="off">
+      <button onclick="submitToken()">Connect</button>
+      <div id="auth-error"></div>
+    </div>
+  </div>
+
+  <div id="status">
+    <span class="status-dot disconnected" id="dot"></span>
+    <span id="status-text">Waiting for token...</span>
+  </div>
+  <div id="canvas-container">
+    <canvas id="screen"></canvas>
+  </div>
+  <div id="toolbar">
+    <button onclick="toggleKeyboard()">Keyboard</button>
+    <button onclick="sendKey('ctrl+alt+delete')">Ctrl+Alt+Del</button>
+    <button onclick="sendKey('alt+tab')">Alt+Tab</button>
+    <button onclick="sendScroll(-3)">Scroll Up</button>
+    <button onclick="sendScroll(3)">Scroll Down</button>
+    <label style="color:#aaa;font-size:12px;display:flex;align-items:center;gap:6px;">
+      Quality <input type="range" id="quality-slider" min="10" max="90" value="50">
+    </label>
+  </div>
+  <input type="text" id="keyboard-input" autocomplete="off">
+
+  <script>
+    const canvas = document.getElementById('screen');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('status-text');
+    const dot = document.getElementById('dot');
+    const container = document.getElementById('canvas-container');
+    const authOverlay = document.getElementById('auth-overlay');
+    const authError = document.getElementById('auth-error');
+
+    let ws, reconnectTimer, token = null;
+    let scaleX = 1, scaleY = 1;
+    let lastTouchX = 0, lastTouchY = 0;
+    let touchStartTime = 0;
+
+    // Allow passing ?token=xxx in the URL so you can bookmark a direct link.
+    const urlToken = new URLSearchParams(location.search).get('token');
+    if (urlToken) {
+      token = urlToken;
+      authOverlay.style.display = 'none';
+      connect();
+    }
+
+    function submitToken() {
+      const val = document.getElementById('token-input').value.trim();
+      if (!val) { authError.textContent = 'Enter a token'; return; }
+      token = val;
+      authOverlay.style.display = 'none';
+      connect();
+    }
+
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/browser?token=${encodeURIComponent(token)}`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        statusText.textContent = 'Connected — Live';
+        dot.className = 'status-dot connected';
+        clearTimeout(reconnectTimer);
+      };
+
+      ws.onclose = (e) => {
+        if (e.code === 4401) {
+          statusText.textContent = 'Invalid token';
+          authOverlay.style.display = 'flex';
+          authError.textContent = 'Invalid token, try again';
+          return;
+        }
+        statusText.textContent = 'Disconnected — Reconnecting...';
+        dot.className = 'status-dot disconnected';
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => ws.close();
+
+      ws.onmessage = (e) => {
+        const blob = new Blob([e.data], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          if (canvas.width !== img.width || canvas.height !== img.height) {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const w = container.clientWidth;
+            const scale = w / img.width;
+            canvas.style.width = w + 'px';
+            canvas.style.height = (img.height * scale) + 'px';
+            scaleX = img.width / w;
+            scaleY = img.height / (img.height * scale);
+          }
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+      };
+    }
+
+    function send(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify(obj));
+    }
+
+    canvas.addEventListener('mousemove', e => {
+      const r = canvas.getBoundingClientRect();
+      send({ type: 'mousemove', x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY });
+    });
+    canvas.addEventListener('mousedown', e => {
+      const r = canvas.getBoundingClientRect();
+      send({ type: 'mousedown', button: e.button, x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY });
+    });
+    canvas.addEventListener('mouseup', e => {
+      send({ type: 'mouseup', button: e.button });
+    });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      const t = e.touches[0];
+      const r = canvas.getBoundingClientRect();
+      lastTouchX = (t.clientX - r.left) * scaleX;
+      lastTouchY = (t.clientY - r.top) * scaleY;
+      touchStartTime = Date.now();
+      send({ type: 'mousemove', x: lastTouchX, y: lastTouchY });
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      const duration = Date.now() - touchStartTime;
+      if (duration < 300) {
+        send({ type: 'mousedown', button: 0, x: lastTouchX, y: lastTouchY });
+        setTimeout(() => send({ type: 'mouseup', button: 0 }), 100);
+      } else {
+        send({ type: 'mousedown', button: 2, x: lastTouchX, y: lastTouchY });
+        setTimeout(() => send({ type: 'mouseup', button: 2 }), 100);
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      const t = e.touches[0];
+      const r = canvas.getBoundingClientRect();
+      lastTouchX = (t.clientX - r.left) * scaleX;
+      lastTouchY = (t.clientY - r.top) * scaleY;
+      send({ type: 'mousemove', x: lastTouchX, y: lastTouchY });
+    }, { passive: false });
+
+    function toggleKeyboard() {
+      const inp = document.getElementById('keyboard-input');
+      inp.style.bottom = inp.style.bottom === '0px' ? '-100px' : '0px';
+      inp.focus();
+    }
+
+    document.getElementById('keyboard-input').addEventListener('keydown', e => {
+      e.preventDefault();
+      send({ type: 'keydown', key: e.key });
+    });
+
+    document.getElementById('keyboard-input').addEventListener('input', e => {
+      if (e.data) send({ type: 'keypress', key: e.data });
+      e.target.value = '';
+    });
+
+    function sendKey(combo) {
+      send({ type: 'hotkey', combo });
+    }
+
+    function sendScroll(dy) {
+      send({ type: 'scroll', x: lastTouchX, y: lastTouchY, dy });
+    }
+  </script>
+</body>
+</html>
