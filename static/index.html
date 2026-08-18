@@ -334,9 +334,17 @@
     document.getElementById('btn-left').addEventListener('click', () => clickAt(0));
     document.getElementById('btn-right').addEventListener('click', () => clickAt(2));
 
-    // ---- D-pad: hold a direction to glide the virtual cursor that way -------
-    const DPAD_SPEED = 14;      // cursor px moved per frame while a button is held
+    // ---- D-pad: tap to nudge a little, hold to creep steadily ---------------
+    const DPAD_STEP = 4;        // pixels moved per step (a single tap = one step)
+    const DPAD_INTERVAL = 60;   // ms between steps while a button is held
     let dirX = 0, dirY = 0;     // current held direction (-1, 0, 1)
+
+    function nudge() {
+      if (!cursorReady || (!dirX && !dirY)) return;
+      vx = Math.max(0, Math.min(canvas.width, vx + dirX * DPAD_STEP));
+      vy = Math.max(0, Math.min(canvas.height, vy + dirY * DPAD_STEP));
+      send({ type: 'mousemove', x: vx, y: vy });
+    }
 
     document.querySelectorAll('.dbtn').forEach(btn => {
       const dx = parseInt(btn.dataset.dx, 10);
@@ -345,6 +353,7 @@
         e.preventDefault();
         dirX = dx; dirY = dy; btn.classList.add('held');
         try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+        nudge();   // immediate step so a quick tap moves a little
       };
       const release = () => {
         if (dirX === dx && dirY === dy) { dirX = 0; dirY = 0; }
@@ -356,16 +365,8 @@
       btn.addEventListener('pointerleave', release);
     });
 
-    // Continuously advance the virtual cursor while a direction is held.
-    function dpadLoop() {
-      if (cursorReady && (dirX || dirY)) {
-        vx = Math.max(0, Math.min(canvas.width, vx + dirX * DPAD_SPEED));
-        vy = Math.max(0, Math.min(canvas.height, vy + dirY * DPAD_SPEED));
-        send({ type: 'mousemove', x: vx, y: vy });
-      }
-      requestAnimationFrame(dpadLoop);
-    }
-    requestAnimationFrame(dpadLoop);
+    // While a direction stays held, keep stepping slowly.
+    setInterval(nudge, DPAD_INTERVAL);
 
     // ---- Scroll strip: drag up/down to scroll; springs back to center -------
     const scrollStrip = document.getElementById('scroll-strip');
