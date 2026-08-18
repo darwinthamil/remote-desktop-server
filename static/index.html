@@ -117,26 +117,45 @@
 
       ws.onerror = () => ws.close();
 
+      // Keep only the newest frame. If frames arrive faster than we can
+      // decode/draw (slow network catching up), we skip the stale ones instead
+      // of queueing them — this keeps latency from snowballing.
       ws.onmessage = (e) => {
-        const blob = new Blob([e.data], { type: 'image/jpeg' });
-        const url = URL.createObjectURL(blob);
-        const img = new Image();
-        img.onload = () => {
-          if (canvas.width !== img.width || canvas.height !== img.height) {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const w = container.clientWidth;
-            const scale = w / img.width;
-            canvas.style.width = w + 'px';
-            canvas.style.height = (img.height * scale) + 'px';
-            scaleX = img.width / w;
-            scaleY = img.height / (img.height * scale);
-          }
-          ctx.drawImage(img, 0, 0);
-          URL.revokeObjectURL(url);
-        };
-        img.src = url;
+        pendingFrame = e.data;
+        if (!decoding) decodeLoop();
       };
+    }
+
+    function fitCanvas(imgW, imgH) {
+      if (canvas.width === imgW && canvas.height === imgH) return;
+      canvas.width = imgW;
+      canvas.height = imgH;
+      const w = container.clientWidth;
+      const scale = w / imgW;
+      canvas.style.width = w + 'px';
+      canvas.style.height = (imgH * scale) + 'px';
+      scaleX = imgW / w;
+      scaleY = imgH / (imgH * scale);
+    }
+
+    let pendingFrame = null, decoding = false;
+
+    async function decodeLoop() {
+      decoding = true;
+      try {
+        while (pendingFrame) {
+          const data = pendingFrame;
+          pendingFrame = null;   // grab latest; anything newer replaces it
+          try {
+            const bitmap = await createImageBitmap(new Blob([data], { type: 'image/jpeg' }));
+            fitCanvas(bitmap.width, bitmap.height);
+            ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+          } catch (_) { /* drop undecodable frame */ }
+        }
+      } finally {
+        decoding = false;
+      }
     }
 
     function send(obj) {
@@ -211,6 +230,12 @@
     function sendScroll(dy) {
       send({ type: 'scroll', x: lastTouchX, y: lastTouchY, dy });
     }
+
+    // Live quality control — tells the agent to change JPEG quality on the fly.
+    const qualitySlider = document.getElementById('quality-slider');
+    qualitySlider.addEventListener('change', () => {
+      send({ type: 'quality', value: parseInt(qualitySlider.value, 10) });
+    });
   </script>
 </body>
 </html>
