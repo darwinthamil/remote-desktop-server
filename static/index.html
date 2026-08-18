@@ -213,8 +213,8 @@
       if (!cursorReady) return;
       ctx.save();
       ctx.strokeStyle = '#00ff88';
-      ctx.lineWidth = Math.max(2, canvas.width / 600);
-      const r = Math.max(8, canvas.width / 120);
+      ctx.lineWidth = Math.max(1, canvas.width / 1200);
+      const r = Math.max(4, canvas.width / 240);
       ctx.beginPath();
       ctx.arc(vx, vy, r, 0, Math.PI * 2);
       ctx.moveTo(vx - r * 1.6, vy); ctx.lineTo(vx + r * 1.6, vy);
