@@ -8,8 +8,45 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; display: flex; flex-direction: column; height: 100vh; overflow: hidden; font-family: sans-serif; }
     #status { background: #1a1a2e; color: #00ff88; font-family: monospace; font-size: 12px; padding: 6px 12px; text-align: center; }
-    #canvas-container { flex: 1; overflow: auto; position: relative; }
+    #canvas-container { flex: 0 1 auto; overflow: auto; position: relative; }
     canvas { display: block; cursor: crosshair; touch-action: none; }
+
+    /* Control panel fills the empty space between the screen and the toolbar. */
+    #controls {
+      flex: 1 1 auto; min-height: 150px; background: #0d0d1a;
+      display: flex; align-items: center; justify-content: space-around;
+      padding: 12px; gap: 12px;
+    }
+
+    /* Virtual joystick */
+    #joystick {
+      position: relative; width: 130px; height: 130px; border-radius: 50%;
+      background: radial-gradient(circle, #16213e 0%, #0f1830 70%, #0a1226 100%);
+      border: 2px solid #0f3460; touch-action: none; flex: 0 0 auto;
+    }
+    #joy-knob {
+      position: absolute; top: 50%; left: 50%; width: 54px; height: 54px;
+      margin: -27px 0 0 -27px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #00ff88, #009e55);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.6); transition: transform 0.05s;
+    }
+    #joy-label, #scroll-label { color: #557; font-size: 11px; text-align: center; margin-top: 4px; }
+
+    /* Vertical scroll strip */
+    #scroll-wrap { display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; }
+    #scroll-strip {
+      position: relative; width: 46px; height: 130px; border-radius: 23px;
+      background: #16213e; border: 2px solid #0f3460; touch-action: none;
+    }
+    #scroll-thumb {
+      position: absolute; top: 50%; left: 50%; width: 40px; height: 40px;
+      margin: -20px 0 0 -20px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #4aa3ff, #1667c0);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.6); transition: transform 0.05s;
+    }
+    #click-col { display: flex; flex-direction: column; gap: 10px; flex: 0 0 auto; }
+    #click-col button { min-width: 90px; }
+
     #toolbar { background: #1a1a2e; padding: 8px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
     button { background: #16213e; color: #fff; border: 1px solid #0f3460; padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; }
     button:active { background: #0f3460; }
@@ -51,12 +88,28 @@
   <div id="canvas-container">
     <canvas id="screen"></canvas>
   </div>
+
+  <div id="controls">
+    <div>
+      <div id="joystick"><div id="joy-knob"></div></div>
+      <div id="joy-label">move</div>
+    </div>
+
+    <div id="click-col">
+      <button id="btn-left">Left Click</button>
+      <button id="btn-right">Right Click</button>
+    </div>
+
+    <div id="scroll-wrap">
+      <div id="scroll-strip"><div id="scroll-thumb"></div></div>
+      <div id="scroll-label">scroll</div>
+    </div>
+  </div>
+
   <div id="toolbar">
     <button onclick="toggleKeyboard()">Keyboard</button>
     <button onclick="sendKey('ctrl+alt+delete')">Ctrl+Alt+Del</button>
     <button onclick="sendKey('alt+tab')">Alt+Tab</button>
-    <button onclick="sendScroll(-3)">Scroll Up</button>
-    <button onclick="sendScroll(3)">Scroll Down</button>
     <label style="color:#aaa;font-size:12px;display:flex;align-items:center;gap:6px;">
       Quality <input type="range" id="quality-slider" min="10" max="90" value="50">
     </label>
@@ -76,6 +129,11 @@
     let scaleX = 1, scaleY = 1;
     let lastTouchX = 0, lastTouchY = 0;
     let touchStartTime = 0;
+
+    // Virtual cursor position, in streamed-image pixel space (same space the
+    // agent maps back to real screen coords). Driven by the joystick and by
+    // direct taps on the screen; used as the target for the click buttons.
+    let vx = 0, vy = 0, cursorReady = false;
 
     // Allow passing ?token=xxx in the URL so you can bookmark a direct link.
     const urlToken = new URLSearchParams(location.search).get('token');
@@ -137,6 +195,23 @@
       canvas.style.height = (imgH * scale) + 'px';
       scaleX = imgW / w;
       scaleY = imgH / (imgH * scale);
+      if (!cursorReady) {           // start the virtual cursor at the center
+        vx = imgW / 2; vy = imgH / 2; cursorReady = true;
+      }
+    }
+
+    function drawCursor() {
+      if (!cursorReady) return;
+      ctx.save();
+      ctx.strokeStyle = '#00ff88';
+      ctx.lineWidth = Math.max(2, canvas.width / 600);
+      const r = Math.max(8, canvas.width / 120);
+      ctx.beginPath();
+      ctx.arc(vx, vy, r, 0, Math.PI * 2);
+      ctx.moveTo(vx - r * 1.6, vy); ctx.lineTo(vx + r * 1.6, vy);
+      ctx.moveTo(vx, vy - r * 1.6); ctx.lineTo(vx, vy + r * 1.6);
+      ctx.stroke();
+      ctx.restore();
     }
 
     let pendingFrame = null, decoding = false;
@@ -151,6 +226,7 @@
             const bitmap = await createImageBitmap(new Blob([data], { type: 'image/jpeg' }));
             fitCanvas(bitmap.width, bitmap.height);
             ctx.drawImage(bitmap, 0, 0);
+            drawCursor();          // overlay where the virtual cursor is
             bitmap.close();
           } catch (_) { /* drop undecodable frame */ }
         }
@@ -193,8 +269,8 @@
       e.preventDefault();
       const t = e.touches[0];
       const r = canvas.getBoundingClientRect();
-      lastTouchX = (t.clientX - r.left) * scaleX;
-      lastTouchY = (t.clientY - r.top) * scaleY;
+      lastTouchX = vx = (t.clientX - r.left) * scaleX;
+      lastTouchY = vy = (t.clientY - r.top) * scaleY;
       touchStartTime = Date.now();
       send({ type: 'mousemove', x: lastTouchX, y: lastTouchY });
     }, { passive: false });
@@ -215,8 +291,8 @@
       e.preventDefault();
       const t = e.touches[0];
       const r = canvas.getBoundingClientRect();
-      lastTouchX = (t.clientX - r.left) * scaleX;
-      lastTouchY = (t.clientY - r.top) * scaleY;
+      lastTouchX = vx = (t.clientX - r.left) * scaleX;
+      lastTouchY = vy = (t.clientY - r.top) * scaleY;
       send({ type: 'mousemove', x: lastTouchX, y: lastTouchY });
     }, { passive: false });
 
@@ -240,9 +316,88 @@
       send({ type: 'hotkey', combo });
     }
 
-    function sendScroll(dy) {
-      send({ type: 'scroll', x: lastTouchX, y: lastTouchY, dy });
+    // ---- Click buttons: click at the current virtual cursor position --------
+    function clickAt(button) {
+      send({ type: 'mousemove', x: vx, y: vy });
+      send({ type: 'mousedown', button, x: vx, y: vy });
+      setTimeout(() => send({ type: 'mouseup', button }), 80);
     }
+    document.getElementById('btn-left').addEventListener('click', () => clickAt(0));
+    document.getElementById('btn-right').addEventListener('click', () => clickAt(2));
+
+    // ---- Joystick: drag to steer the virtual cursor in any direction --------
+    const joystick = document.getElementById('joystick');
+    const joyKnob = document.getElementById('joy-knob');
+    const JOY_RADIUS = 38;      // max knob travel from center (px)
+    const JOY_MAX_SPEED = 22;   // cursor px moved per frame at full deflection
+    let joyActive = false, joyNX = 0, joyNY = 0;
+
+    function joyMove(clientX, clientY) {
+      const r = joystick.getBoundingClientRect();
+      let dx = clientX - (r.left + r.width / 2);
+      let dy = clientY - (r.top + r.height / 2);
+      const dist = Math.hypot(dx, dy);
+      if (dist > JOY_RADIUS) { dx *= JOY_RADIUS / dist; dy *= JOY_RADIUS / dist; }
+      joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+      joyNX = dx / JOY_RADIUS;   // -1..1
+      joyNY = dy / JOY_RADIUS;
+    }
+    function joyReset() {
+      joyActive = false; joyNX = joyNY = 0;
+      joyKnob.style.transform = 'translate(0, 0)';
+    }
+    joystick.addEventListener('pointerdown', e => {
+      e.preventDefault(); joyActive = true;
+      joystick.setPointerCapture(e.pointerId); joyMove(e.clientX, e.clientY);
+    });
+    joystick.addEventListener('pointermove', e => { if (joyActive) joyMove(e.clientX, e.clientY); });
+    joystick.addEventListener('pointerup', joyReset);
+    joystick.addEventListener('pointercancel', joyReset);
+
+    // Continuously advance the virtual cursor while the joystick is deflected.
+    function joyLoop() {
+      if (joyActive && cursorReady && (joyNX || joyNY)) {
+        vx = Math.max(0, Math.min(canvas.width, vx + joyNX * JOY_MAX_SPEED));
+        vy = Math.max(0, Math.min(canvas.height, vy + joyNY * JOY_MAX_SPEED));
+        send({ type: 'mousemove', x: vx, y: vy });
+      }
+      requestAnimationFrame(joyLoop);
+    }
+    requestAnimationFrame(joyLoop);
+
+    // ---- Scroll strip: drag up/down to scroll; springs back to center -------
+    const scrollStrip = document.getElementById('scroll-strip');
+    const scrollThumb = document.getElementById('scroll-thumb');
+    const SCROLL_RADIUS = 45;   // max thumb travel from center (px)
+    let scrollActive = false, scrollAmt = 0;
+
+    function scrollMove(clientY) {
+      const r = scrollStrip.getBoundingClientRect();
+      let dy = clientY - (r.top + r.height / 2);
+      dy = Math.max(-SCROLL_RADIUS, Math.min(SCROLL_RADIUS, dy));
+      scrollThumb.style.transform = `translateY(${dy}px)`;
+      scrollAmt = dy / SCROLL_RADIUS;   // -1 (up) .. 1 (down)
+    }
+    function scrollReset() {
+      scrollActive = false; scrollAmt = 0;
+      scrollThumb.style.transform = 'translateY(0)';
+    }
+    scrollStrip.addEventListener('pointerdown', e => {
+      e.preventDefault(); scrollActive = true;
+      scrollStrip.setPointerCapture(e.pointerId); scrollMove(e.clientY);
+    });
+    scrollStrip.addEventListener('pointermove', e => { if (scrollActive) scrollMove(e.clientY); });
+    scrollStrip.addEventListener('pointerup', scrollReset);
+    scrollStrip.addEventListener('pointercancel', scrollReset);
+
+    // Emit scroll steps at a steady cadence while the thumb is held off-center.
+    setInterval(() => {
+      if (scrollActive && Math.abs(scrollAmt) > 0.15) {
+        // Up (negative dy) scrolls up, down scrolls down. Magnitude = speed.
+        const step = Math.round(scrollAmt * 3);
+        if (step !== 0) send({ type: 'scroll', x: vx, y: vy, dy: step });
+      }
+    }, 90);
 
     // Live quality control — tells the agent to change JPEG quality on the fly.
     const qualitySlider = document.getElementById('quality-slider');
