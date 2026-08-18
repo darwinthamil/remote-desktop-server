@@ -18,18 +18,22 @@
       padding: 12px; gap: 12px;
     }
 
-    /* Virtual joystick */
-    #joystick {
-      position: relative; width: 130px; height: 130px; border-radius: 50%;
-      background: radial-gradient(circle, #16213e 0%, #0f1830 70%, #0a1226 100%);
-      border: 2px solid #0f3460; touch-action: none; flex: 0 0 auto;
+    /* Directional D-pad */
+    #dpad {
+      display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px);
+      gap: 6px; flex: 0 0 auto; touch-action: none;
     }
-    #joy-knob {
-      position: absolute; top: 50%; left: 50%; width: 54px; height: 54px;
-      margin: -27px 0 0 -27px; border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #00ff88, #009e55);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.6); transition: transform 0.05s;
+    .dbtn {
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 35% 35%, #16213e, #0f1830);
+      border: 2px solid #0f3460; border-radius: 10px; color: #00ff88;
+      font-size: 20px; user-select: none; -webkit-user-select: none; touch-action: none;
     }
+    .dbtn:active, .dbtn.held { background: #00ff88; color: #002; }
+    #d-up    { grid-column: 2; grid-row: 1; }
+    #d-left  { grid-column: 1; grid-row: 2; }
+    #d-right { grid-column: 3; grid-row: 2; }
+    #d-down  { grid-column: 2; grid-row: 3; }
     #joy-label, #scroll-label { color: #557; font-size: 11px; text-align: center; margin-top: 4px; }
 
     /* Vertical scroll strip */
@@ -91,7 +95,12 @@
 
   <div id="controls">
     <div>
-      <div id="joystick"><div id="joy-knob"></div></div>
+      <div id="dpad">
+        <div class="dbtn" id="d-up"    data-dx="0"  data-dy="-1">▲</div>
+        <div class="dbtn" id="d-left"  data-dx="-1" data-dy="0">◀</div>
+        <div class="dbtn" id="d-right" data-dx="1"  data-dy="0">▶</div>
+        <div class="dbtn" id="d-down"  data-dx="0"  data-dy="1">▼</div>
+      </div>
       <div id="joy-label">move</div>
     </div>
 
@@ -325,45 +334,38 @@
     document.getElementById('btn-left').addEventListener('click', () => clickAt(0));
     document.getElementById('btn-right').addEventListener('click', () => clickAt(2));
 
-    // ---- Joystick: drag to steer the virtual cursor in any direction --------
-    const joystick = document.getElementById('joystick');
-    const joyKnob = document.getElementById('joy-knob');
-    const JOY_RADIUS = 38;      // max knob travel from center (px)
-    const JOY_MAX_SPEED = 22;   // cursor px moved per frame at full deflection
-    let joyActive = false, joyNX = 0, joyNY = 0;
+    // ---- D-pad: hold a direction to glide the virtual cursor that way -------
+    const DPAD_SPEED = 14;      // cursor px moved per frame while a button is held
+    let dirX = 0, dirY = 0;     // current held direction (-1, 0, 1)
 
-    function joyMove(clientX, clientY) {
-      const r = joystick.getBoundingClientRect();
-      let dx = clientX - (r.left + r.width / 2);
-      let dy = clientY - (r.top + r.height / 2);
-      const dist = Math.hypot(dx, dy);
-      if (dist > JOY_RADIUS) { dx *= JOY_RADIUS / dist; dy *= JOY_RADIUS / dist; }
-      joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
-      joyNX = dx / JOY_RADIUS;   // -1..1
-      joyNY = dy / JOY_RADIUS;
-    }
-    function joyReset() {
-      joyActive = false; joyNX = joyNY = 0;
-      joyKnob.style.transform = 'translate(0, 0)';
-    }
-    joystick.addEventListener('pointerdown', e => {
-      e.preventDefault(); joyActive = true;
-      joystick.setPointerCapture(e.pointerId); joyMove(e.clientX, e.clientY);
+    document.querySelectorAll('.dbtn').forEach(btn => {
+      const dx = parseInt(btn.dataset.dx, 10);
+      const dy = parseInt(btn.dataset.dy, 10);
+      const press = e => {
+        e.preventDefault();
+        dirX = dx; dirY = dy; btn.classList.add('held');
+        try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      };
+      const release = () => {
+        if (dirX === dx && dirY === dy) { dirX = 0; dirY = 0; }
+        btn.classList.remove('held');
+      };
+      btn.addEventListener('pointerdown', press);
+      btn.addEventListener('pointerup', release);
+      btn.addEventListener('pointercancel', release);
+      btn.addEventListener('pointerleave', release);
     });
-    joystick.addEventListener('pointermove', e => { if (joyActive) joyMove(e.clientX, e.clientY); });
-    joystick.addEventListener('pointerup', joyReset);
-    joystick.addEventListener('pointercancel', joyReset);
 
-    // Continuously advance the virtual cursor while the joystick is deflected.
-    function joyLoop() {
-      if (joyActive && cursorReady && (joyNX || joyNY)) {
-        vx = Math.max(0, Math.min(canvas.width, vx + joyNX * JOY_MAX_SPEED));
-        vy = Math.max(0, Math.min(canvas.height, vy + joyNY * JOY_MAX_SPEED));
+    // Continuously advance the virtual cursor while a direction is held.
+    function dpadLoop() {
+      if (cursorReady && (dirX || dirY)) {
+        vx = Math.max(0, Math.min(canvas.width, vx + dirX * DPAD_SPEED));
+        vy = Math.max(0, Math.min(canvas.height, vy + dirY * DPAD_SPEED));
         send({ type: 'mousemove', x: vx, y: vy });
       }
-      requestAnimationFrame(joyLoop);
+      requestAnimationFrame(dpadLoop);
     }
-    requestAnimationFrame(joyLoop);
+    requestAnimationFrame(dpadLoop);
 
     // ---- Scroll strip: drag up/down to scroll; springs back to center -------
     const scrollStrip = document.getElementById('scroll-strip');
