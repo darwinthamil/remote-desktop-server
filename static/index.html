@@ -46,6 +46,7 @@
   <div id="status">
     <span class="status-dot disconnected" id="dot"></span>
     <span id="status-text">Waiting for token...</span>
+    <span id="input-debug" style="color:#ffb347;margin-left:10px;"></span>
   </div>
   <div id="canvas-container">
     <canvas id="screen"></canvas>
@@ -158,9 +159,21 @@
       }
     }
 
+    const inputDebug = document.getElementById('input-debug');
+    let sentCount = 0;
+
     function send(obj) {
-      if (ws && ws.readyState === WebSocket.OPEN)
+      if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(obj));
+        sentCount++;
+        // Show what we actually sent, so control problems are visible on-device.
+        if (obj.x !== undefined)
+          inputDebug.textContent = `${obj.type} @${Math.round(obj.x)},${Math.round(obj.y)} (#${sentCount})`;
+        else
+          inputDebug.textContent = `${obj.type} (#${sentCount})`;
+      } else {
+        inputDebug.textContent = 'NOT SENT — socket closed';
+      }
     }
 
     canvas.addEventListener('mousemove', e => {
