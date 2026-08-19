@@ -47,7 +47,13 @@ async def laptop_endpoint(ws: WebSocket, token: str = Query(default=None)):
             browser_clients.difference_update(disconnected)
     except WebSocketDisconnect:
         print("Laptop agent disconnected")
-        laptop_ws = None
+    finally:
+        # Only clear the global if it still points to THIS connection. A stale
+        # old connection tearing down must not wipe out a newer agent that has
+        # already registered itself (otherwise video keeps flowing but commands
+        # are silently dropped).
+        if laptop_ws is ws:
+            laptop_ws = None
 
 
 @app.websocket("/browser")
